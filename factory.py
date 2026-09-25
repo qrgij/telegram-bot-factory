@@ -38,6 +38,7 @@ log = logging.getLogger("factory")
 FLOW = {}
 
 APP_BOT = None  # 主机器人实例（编辑器保存代码后通知用户用）
+APP = None      # 主机器人 Application（webhook 处理更新用）
 
 INTENT_RE = re.compile(
     r"(?:创建|新建|做一个|帮我做|帮我建|帮我搞|申请|开一个|整一个|我要做|想做一个|弄一个|需要创建).{0,12}(?:机器人|机器|bot)",
@@ -684,10 +685,27 @@ async def handle_options(request):
     return web.Response(status=200)
 
 
+async def handle_webhook(request):
+    """Telegram webhook 入口：接收官方推送的更新并交给主机器人处理。"""
+    token = request.match_info.get("token", "")
+    if not secrets.compare_digest(token, config.BOT_TOKEN):
+        return web.Response(status=404)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.Response(status=400)
+    if APP is None:
+        return web.Response(status=503)
+    update = Update.de_json(data, APP.bot)
+    await APP.process_update(update)
+    return web.Response(status=200)
+
+
 def build_web_app():
     app_ = web.Application(middlewares=[_cors_middleware()])
     app_.router.add_get("/", handle_health)
     app_.router.add_get("/health", handle_health)
+    app_.router.add_post("/webhook/{token}", handle_webhook)
     app_.router.add_get("/api/code", handle_code)
     app_.router.add_post("/api/code", handle_code)
     app_.router.add_route("OPTIONS", "/api/code", handle_options)
@@ -746,13 +764,24 @@ async def main():
         return
 
     app = build_application()
-    global APP_BOT
+    global APP_BOT, APP
     APP_BOT = app.bot
+    APP = app
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    me = await app.bot.get_me()
-    log.info("主机器人 @%s 已开始轮询", me.username)
+
+    if config.BOT_MODE == "webhook":
+        if not config.BASE_URL:
+            raise SystemExit("BOT_MODE=webhook 需要设置 BASE_URL 环境变量（部署后的服务地址）")
+        url = f"{config.BASE_URL}/webhook/{config.BOT_TOKEN}"
+        await app.bot.set_webhook(url, allowed_updates=Update.ALL_TYPES)
+        me = await app.bot.get_me()
+        log.info("主机器人 @%s 已设置 webhook：%s", me.username, url)
+    else:
+        await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        me = await app.bot.get_me()
+        log.info("主机器人 @%s 已开始轮询", me.username)
+
     asyncio.create_task(botfather.run_watcher(app.bot))
     await start_http()
     await asyncio.Event().wait()

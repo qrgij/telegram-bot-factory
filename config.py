@@ -21,6 +21,11 @@ PORT = int(os.environ.get("PORT", "8000"))
 # 同时允许运行的最多子机器人数量（保护免费实例内存）
 MAX_BOTS = int(os.environ.get("MAX_BOTS", "4"))
 
+# 运行模式：polling（本地/无 webhook 场景）或 webhook（部署到 Render，避免与其他轮询实例冲突）
+BOT_MODE = os.environ.get("BOT_MODE", "polling").lower()
+if BOT_MODE not in ("polling", "webhook"):
+    raise SystemExit("BOT_MODE 只支持 polling 或 webhook")
+
 # 数据目录（SQLite、子机器人代码、日志）
 DATA_DIR = os.environ.get(
     "FACTORY_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
