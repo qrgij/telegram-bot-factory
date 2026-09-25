@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>机器人工厂 · 代码编辑器</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f1117; color: #e6e6e6;
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; background: #161a23; border-bottom: 1px solid #262c3a;
+  }
+  header .title { font-weight: 600; font-size: 15px; }
+  header .sub { color: #8b93a7; font-size: 13px; }
+  .spacer { flex: 1; }
+  select, button {
+    background: #1f2533; color: #e6e6e6; border: 1px solid #333c52;
+    border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: #2a3247; }
+  button.primary { background: #2f6fed; border-color: #2f6fed; font-weight: 600; }
+  button.primary:hover { background: #4a83f5; }
+  button.danger { background: #d64545; border-color: #d64545; }
+  #status {
+    font-size: 13px; padding: 4px 10px; border-radius: 6px;
+    color: #8b93a7; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #status.ok { color: #4ade80; }
+  #status.err { color: #f87171; }
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 16px; gap: 10px; }
+  #toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #toolbar .hint { font-size: 12px; color: #8b93a7; }
+  #editorWrap { flex: 1; display: flex; min-height: 0; border: 1px solid #262c3a; border-radius: 8px; overflow: hidden; }
+  textarea {
+    flex: 1; background: #0d0f15; color: #d6dbe6;
+    font-family: "SF Mono", Consolas, "Courier New", monospace;
+    font-size: 13px; line-height: 1.55; padding: 12px 14px; border: none;
+    resize: none; outline: none; tab-size: 4; white-space: pre; overflow: auto;
+  }
+  footer { padding: 8px 16px; font-size: 12px; color: #5c6476; border-top: 1px solid #1b202b; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">🤖 机器人工厂 · 代码编辑器</span>
+  <span class="sub" id="botLabel">未连接</span>
+  <span class="spacer"></span>
+  <div id="status">等待连接…</div>
+</header>
+<main>
+  <div id="toolbar">
+    <select id="templateSelect">
+      <option value="">— 套用内置模板（会覆盖当前代码）—</option>
+    </select>
+    <button id="loadTpl">套用模板</button>
+    <button id="saveBtn" class="primary">💾 保存代码</button>
+    <button id="checkBtn">检查语法</button>
+    <span class="hint">代码需使用 python-telegram-bot v21，通过 os.environ['BOT_TOKEN'] 读取令牌，最后调用 app.run_polling()。</span>
+  </div>
+  <div id="editorWrap">
+    <textarea id="editor" spellcheck="false" placeholder="加载中…"></textarea>
+  </div>
+</main>
+<footer>保存后回到 Telegram，发送 /startbot &lt;用户名&gt; 即可启动机器人。</footer>
+
+<script>
+(function () {
+  var params = {};
+  location.hash.replace(/^#/, "").split("&").forEach(function (kv) {
+    var p = kv.split("=");
+    if (p[0]) params[decodeURIComponent(p[0])] = decodeURIComponent(p[1] || "");
+  });
+  var username = params.u || "";
+  var key = params.k || "";
+  var apiBase = (params.api || "").replace(/\/+$/, "");
+
+  var statusEl = document.getElementById("status");
+  var editor = document.getElementById("editor");
+  var botLabel = document.getElementById("botLabel");
+  var saveBtn = document.getElementById("saveBtn");
+  var checkBtn = document.getElementById("checkBtn");
+  var tplSelect = document.getElementById("templateSelect");
+  var loadTplBtn = document.getElementById("loadTpl");
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || "";
+  }
+
+  if (!username || !key || !apiBase) {
+    setStatus("错误：链接缺少参数（u / k / api）。请从 Telegram 机器人的 /editor 命令获取完整链接。", "err");
+    document.title = "编辑器 · 参数缺失";
+    saveBtn.disabled = checkBtn.disabled = loadTplBtn.disabled = true;
+    editor.placeholder = "参数缺失，无法连接后端。";
+    return;
+  }
+
+  botLabel.textContent = "@" + username;
+
+  function apiUrl(path) {
+    return apiBase + path + (path.indexOf("?") >= 0 ? "&" : "?") + "u=" + encodeURIComponent(username) + "&k=" + encodeURIComponent(key);
+  }
+
+  function loadTemplates() {
+    return fetch(apiBase + "/api/templates")
+      .then(function (r) { return r.json(); })
+      .catch(function () { return { ok: false }; });
+  }
+
+  function loadCode() {
+    setStatus("加载中…");
+    return fetch(apiUrl("/api/code"))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus(d.error || "加载失败", "err"); throw new Error(d.error); }
+        editor.value = d.code || "";
+        setStatus("已加载（模板：" + d.template + "）", "ok");
+        document.title = "@" + d.username + " · 编辑器";
+        return d;
+      })
+      .catch(function (e) {
+        if (e.message) setStatus(e.message, "err");
+      });
+  }
+
+  function saveCode() {
+    var code = editor.value;
+    if (!code.trim()) { setStatus("代码为空", "err"); return; }
+    setStatus("保存中…");
+    return fetch(apiUrl("/api/code"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus(d.error || "保存失败", "err"); throw new Error(d.error); }
+        setStatus("✅ 已保存并通知机器人。回到 Telegram 用 /startbot 启动。", "ok");
+      })
+      .catch(function (e) { if (e.message) setStatus(e.message, "err"); });
+  }
+
+  function checkSyntax() {
+    // 由后端 compile 校验；这里本地只做简单括号平衡提示
+    var code = editor.value;
+    var opens = (code.match(/\(/g) || []).length, closes = (code.match(/\)/g) || []).length;
+    setStatus(opens === closes ? "本地括号平衡 OK，最终以保存时的后端校验为准。" : "提示：括号数量不匹配（" + opens + " / " + closes + "），请检查。", opens === closes ? "ok" : "err");
+  }
+
+  function applyTemplate() {
+    var name = tplSelect.value;
+    if (!name) { setStatus("请先选择模板", "err"); return; }
+    setStatus("套用模板中…");
+    return fetch(apiBase + "/api/templates")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        // 模板代码在后端；这里简单通过 /api/code 保存模板不可行，
+        // 因此直接提示用户在后端用 /template 命令更可靠
+        if (d.ok) {
+          setStatus("请在 Telegram 中使用 /template " + username + " 套用模板（网页端暂不覆盖模板代码）。", "ok");
+        }
+      })
+      .catch(function () { setStatus("模板加载失败", "err"); });
+  }
+
+  loadTemplates().then(function (d) {
+    if (d.ok && d.templates) {
+      d.templates.forEach(function (t) {
+        var opt = document.createElement("option");
+        opt.value = t.name;
+        opt.textContent = t.name + "：" + t.desc;
+        tplSelect.appendChild(opt);
+      });
+    }
+  });
+  loadCode();
+
+  saveBtn.addEventListener("click", saveCode);
+  checkBtn.addEventListener("click", checkSyntax);
+  loadTplBtn.addEventListener("click", applyTemplate);
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveCode(); }
+  });
+})();
+</script>
+</body>
+</html>

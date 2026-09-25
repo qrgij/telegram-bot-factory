@@ -1,0 +1,6 @@
+# 密钥与本地数据绝不入库
+.env
+data/
+__pycache__/
+*.pyc
+*.db
